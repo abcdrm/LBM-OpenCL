@@ -115,9 +115,9 @@ int initialise(const char* paramfile, const char* obstaclefile,
 ** timestep calls, in order, the functions:
 ** accelerate_flow(), propagate(), rebound() & collision()
 */
-int timestep(const t_param params, float* cells, float* tmp_cells, int* obstacles, t_ocl ocl, int tt);
+float timestep(const t_param params, float* cells, float* tmp_cells, int* obstacles, t_ocl ocl, int tt, float *tmp);
 int accelerate_flow(const t_param params, t_ocl ocl, int tt);
-int propagate(const t_param params, float* cells, float* tmp_cells, t_ocl ocl, int tt);
+float propagate(const t_param params, float* cells, float* tmp_cells, t_ocl ocl, int tt, float* tmp);
 int write_values(const t_param params, float* cells, int* obstacles, float* av_vels);
 
 /* finalise, including freeing up allocated memory */
@@ -172,6 +172,7 @@ int main(int argc, char* argv[])
 
     /* initialise our data structures and load values from file */
     initialise(paramfile, obstaclefile, &params, &cells, &tmp_cells, &obstacles, &av_vels, &ocl);
+    float* tmp = calloc(((params.nx * params.ny / (BLOCK_SIZE * BLOCK_SIZE)) + 1), sizeof(float));
 
     /* iterate for maxIters timesteps */
     gettimeofday(&timstr, NULL);
@@ -191,7 +192,7 @@ int main(int argc, char* argv[])
 
     for (int tt = 0; tt < params.maxIters; tt++)
     {
-        timestep(params, cells, tmp_cells, obstacles, ocl, tt);
+        av_vels[tt] = timestep(params, cells, tmp_cells, obstacles, ocl, tt, tmp);
 #ifdef DEBUG
         //printf("==timestep: %d==\n", tt);
         //printf("av velocity: %.12E\n", av_vels[tt]);
@@ -210,9 +211,9 @@ int main(int argc, char* argv[])
             ocl.queue, ocl.cells, CL_TRUE, 0,
             sizeof(float) * params.nx * params.ny * NSPEEDS, cells, 0, NULL, NULL);
 
-    err = clEnqueueReadBuffer(
-        ocl.queue, ocl.av_vels, CL_TRUE, 0,
-        sizeof(float) * params.maxIters, av_vels, 0, NULL, NULL);
+    // err = clEnqueueReadBuffer(
+    //     ocl.queue, ocl.av_vels, CL_TRUE, 0,
+    //     sizeof(float) * params.maxIters, av_vels, 0, NULL, NULL);
 
     gettimeofday(&timstr, NULL);
     toc = timstr.tv_sec + (timstr.tv_usec / 1000000.0);
@@ -234,14 +235,14 @@ int main(int argc, char* argv[])
     return EXIT_SUCCESS;
 }
 
-int timestep(const t_param params, float* cells, float* tmp_cells, int* obstacles, t_ocl ocl, int tt)
+float timestep(const t_param params, float* cells, float* tmp_cells, int* obstacles, t_ocl ocl, int tt, float* tmp)
 {
     cl_int err;
 
     accelerate_flow(params, ocl, tt);
-    propagate(params, cells, tmp_cells, ocl, tt);
+    float av_vel = propagate(params, cells, tmp_cells, ocl, tt, tmp);
 
-    return EXIT_SUCCESS;
+    return av_vel;
 }
 
 int accelerate_flow(const t_param params, t_ocl ocl, int tt)
@@ -274,7 +275,7 @@ int accelerate_flow(const t_param params, t_ocl ocl, int tt)
     return EXIT_SUCCESS;
 }
 
-int propagate(const t_param params, float* cells, float* tmp_cells, t_ocl ocl, int tt)
+float propagate(const t_param params, float* cells, float* tmp_cells, t_ocl ocl, int tt, float *tmp)
 {
     cl_int err;
 
@@ -306,7 +307,7 @@ int propagate(const t_param params, float* cells, float* tmp_cells, t_ocl ocl, i
     err = clSetKernelArg(ocl.propagate, 8, sizeof(cl_mem), &ocl.av_vels);
     checkError(err, "setting propagate arg 8", __LINE__);
     err = clSetKernelArg(ocl.propagate, 9, sizeof(cl_int), &tot_cells);
-    checkError(err, "setting propagate arg 9", __LINE__);
+    checkError(err, "setting propagate arg 8", __LINE__);
 
     // Enqueue kernel
     size_t global[2] = { params.nx, params.ny };
@@ -315,7 +316,17 @@ int propagate(const t_param params, float* cells, float* tmp_cells, t_ocl ocl, i
         2, NULL, global, local, 0, NULL, NULL);
     checkError(err, "enqueueing propagate kernel", __LINE__);
 
-    return EXIT_SUCCESS;
+    err = clEnqueueReadBuffer(
+         ocl.queue, ocl.av_vels, CL_TRUE, 0,
+         sizeof(float) * ((params.nx * params.ny / (BLOCK_SIZE * BLOCK_SIZE)) + 1), tmp, 0, NULL, NULL);
+
+    float sum = 0.0f;
+    for (int i = 0; i < ((params.nx * params.ny / (BLOCK_SIZE * BLOCK_SIZE)) + 1); i++)
+    {
+        sum += tmp[i];
+    }
+
+    return sum;
 }
 
 int initialise(const char* paramfile, const char* obstaclefile,
@@ -548,7 +559,7 @@ int initialise(const char* paramfile, const char* obstaclefile,
     checkError(err, "creating av_vels buffer", __LINE__);
     ocl->av_vels = clCreateBuffer(
         ocl->context, CL_MEM_READ_WRITE,
-        sizeof(float) * params->maxIters, NULL, &err);
+        sizeof(float) * ((params->nx * params->ny / (BLOCK_SIZE * BLOCK_SIZE)) + 1), NULL, &err);
 
     return EXIT_SUCCESS;
 }

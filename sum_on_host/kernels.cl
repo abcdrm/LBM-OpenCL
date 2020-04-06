@@ -171,17 +171,17 @@ void reduce(local float* local_av_vels,
 {
     int local_ii = get_local_id(0);
     int local_jj = get_local_id(1);
-    int local_index = local_ii + local_jj * BLOCK_SIZE;
 
-    int offset;
-    for (offset = BLOCK_SIZE * BLOCK_SIZE / 2; offset > 0; offset /= 2) {
-        barrier(CLK_LOCAL_MEM_FENCE);
-        if (local_index < offset) 
-            local_av_vels[local_index] += local_av_vels[local_index + offset];
-    }
-    barrier(CLK_LOCAL_MEM_FENCE);
+    float sum;
+    int i;
 
-    if (local_index == 0) {
-        atomic_float_add(&global_av_vels[tt], local_av_vels[0]);
+    if (local_ii == 0 && local_jj == 0) {
+        sum = 0.0f;
+
+        for (i = 0; i < BLOCK_SIZE * BLOCK_SIZE; i++) {
+            sum += local_av_vels[i];
+        }
+
+        global_av_vels[get_group_id(0) + get_group_id(1) * get_num_groups(0)] = sum;
     }
 }
